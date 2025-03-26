@@ -1,0 +1,33 @@
+
+1. Set Up SQL Server and FileTable
+Enable FILESTREAM:
+
+Open SQL Server Configuration Manager.
+Navigate to SQL Server Services.
+Right-click on your SQL Server instance and select Properties.
+Go to the FILESTREAM tab and enable FILESTREAM for Transact-SQL access.
+Create a Database with FILESTREAM:
+
+Example:
+CREATE DATABASE FileTableDB
+ON PRIMARY
+( NAME = FileTableDB_data,
+  FILENAME = 'C:\FileTableDB_data.mdf' ),
+FILEGROUP FileStreamGroup CONTAINS FILESTREAM
+( NAME = FileTableDB_fs,
+  FILENAME = 'C:\FileTableDB_fs' )
+LOG ON
+( NAME = FileTableDB_log,
+  FILENAME = 'C:\FileTableDB_log.ldf' )
+WITH FILESTREAM ( NON_TRANSACTED_ACCESS = FULL )
+GO
+Create a FileTable:
+
+Example:
+CREATE TABLE DocumentStore AS FileTable
+WITH
+(
+  FILETABLE_DIRECTORY = 'DocumentStore',
+  FILETABLE_COLLATE_FILENAME = database_default
+)
+GO
