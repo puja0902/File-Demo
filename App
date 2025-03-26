@@ -1,0 +1,199 @@
+
+
+1. Django Backend
+a. Set Up Django Project
+Install Django and Create a Project:
+
+pip install django
+django-admin startproject myproject
+cd myproject
+Create a Django App:
+
+python manage.py startapp fileupload
+b. Configure Models and Views
+Views for File Upload and Retrieval:
+
+fileupload/views.py:
+from django.shortcuts import render
+from django.http import JsonResponse, HttpResponse
+import pyodbc
+
+def upload_file(request):
+    if request.method == 'POST':
+        file = request.FILES['file']
+        file_bytes = file.read()
+
+        conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO DocumentStore (name, file_stream) VALUES (?, ?)", file.name, file_bytes)
+        conn.commit()
+        conn.close()
+
+        return JsonResponse({'message': 'File uploaded successfully.'})
+    return JsonResponse({'error': 'Invalid request.'})
+
+def get_files(request):
+    conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+    cursor = conn.cursor()
+    cursor.execute("SELECT stream_id, name FROM DocumentStore")
+    files = cursor.fetchall()
+    conn.close()
+
+    file_list = [{'id': file.stream_id, 'name': file.name} for file in files]
+    return JsonResponse(file_list, safe=False)
+
+def download_file(request, file_id):
+    conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_stream FROM DocumentStore WHERE stream_id = ?", file_id)
+    file = cursor.fetchone()
+    conn.close()
+
+    response = HttpResponse(file.file_stream, content_type='application/octet-stream')
+    response['Content-Disposition'] = f'attachment; filename="{file_id}"'
+    return response
+Configure URLs:
+
+fileupload/urls.py:
+from django.urls import path
+from .views import upload_file, get_files, download_file
+
+urlpatterns = [
+    path('upload/', upload_file, name='upload_file'),
+    path('files/', get_files, name='get_files'),
+    path('files/<str:file_id>/', download_file, name='download_file'),
+]
+Include App URLs in Project:
+
+myproject/urls.py:
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('fileupload/', include('fileupload.urls')),
+]
+2. Angular Frontend
+a. Set Up Angular Project
+Install Angular CLI and Create a Project:
+
+npm install -g @angular/cli
+ng new file-upload-app
+cd file-upload-app
+Generate File Upload Component:
+
+ng generate component file-upload
+b. Implement File Upload and Retrieval
+File Upload Component:
+
+src/app/file-upload/file-upload.component.html:
+
+<form (ngSubmit)="onSubmit()">
+  <input type="file" (change)="onFileSelected($event)" />
+  <button type="submit">Upload</button>
+</form>
+<div *ngFor="let file of files">
+  <span>{{ file.name }}</span>
+  <button (click)="downloadFile(file.id)">Download</button>
+</div>
+src/app/file-upload/file-upload.component.ts:
+
+import { Component, OnInit } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { FileService } from '../file.service';
+
+@Component({
+  selector: 'app-file-upload',
+  templateUrl: './file-upload.component.html',
+  styleUrls: ['./file-upload.component.css']
+})
+export class FileUploadComponent implements OnInit {
+  selectedFile: File;
+  files: any[] = [];
+
+  constructor(private http: HttpClient, private fileService: FileService) {}
+
+  ngOnInit(): void {
+    this.fileService.getFiles().subscribe(data => {
+      this.files = data;
+    });
+  }
+
+  {
+    this.selectedFile = event.target.files[0];
+  }
+
+  onSubmit() {
+    const formData = new FormData();
+    formData.append('file', this.selectedFile);
+
+    this.http.post('/fileupload/upload/', formData).subscribe(response => {
+      console.log('File uploaded successfully', response);
+      this.ngOnInit(); // Refresh the file list
+    });
+  }
+
+  downloadFile(fileId: string): void {
+    this.fileService.downloadFile(fileId).subscribe(blob => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileId;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+}
+File Service:
+
+src/app/file.service.ts:
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class FileService {
+  private baseUrl = '/fileupload/files';
+
+  constructor(private http: HttpClient) {}
+
+  getFiles(): Observable<any> {
+    return this.http.get(this.baseUrl);
+  }
+
+  downloadFile(fileId: string): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/${fileId}`, { responseType: 'blob' });
+  }
+}
+Configure Proxy for API Requests:
+
+Create a proxy.conf.json file to proxy API requests to the Django backend:
+
+{
+  "/fileupload": {
+    "target": "http://localhost:8000",
+    "secure": false
+  }
+}
+Update angular.json to use the proxy configuration:
+
+"architect": {
+  "serve": {
+    "options": {
+      "proxyConfig": "src/proxy.conf.json"
+    }
+  }
+}
+3. Run the Application
+Start Django Server:
+
+Run the Django development server:
+python manage.py runserver
+Start Angular Development Server:
+
+Run the Angular development server:
+ng serve
+This setup provides a complete solution for uploading and retrieving files using Django and Angular. 
