@@ -31,3 +31,167 @@ WITH
   FILETABLE_COLLATE_FILENAME = database_default
 )
 GO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. Django Backend
+a. Set Up Django Project
+Install Django and Create a Project:
+
+pip install django
+django-admin startproject myproject
+cd myproject
+Create a Django App:
+
+python manage.py startapp fileupload
+b. Configure Views for Database and FileTable Creation
+Views for Creating Database and FileTable:
+
+fileupload/views.py:
+from django.http import JsonResponse
+import pyodbc
+
+def create_database_and_filetable(request):
+    conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;UID=your_username;PWD=your_password')
+    cursor = conn.cursor()
+
+    # Create Database
+    cursor.execute("""
+    IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'FileTableDB')
+    BEGIN
+        CREATE DATABASE FileTableDB
+        ON PRIMARY
+        ( NAME = FileTableDB_data,
+          FILENAME = 'C:\\FileTableDB_data.mdf' ),
+        FILEGROUP FileStreamGroup CONTAINS FILESTREAM
+        ( NAME = FileTableDB_fs,
+          FILENAME = 'C:\\FileTableDB_fs' )
+        LOG ON
+        ( NAME = FileTableDB_log,
+          FILENAME = 'C:\\FileTableDB_log.ldf' )
+        WITH FILESTREAM ( NON_TRANSACTED_ACCESS = FULL )
+    END
+    """)
+    conn.commit()
+
+    # Create FileTable
+    cursor.execute("""
+    USE FileTableDB;
+    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DocumentStore')
+    BEGIN
+        CREATE TABLE DocumentStore AS FileTable
+        WITH
+        (
+          FILETABLE_DIRECTORY = 'DocumentStore',
+          FILETABLE_COLLATE_FILENAME = database_default
+        )
+    END
+    """)
+    conn.commit()
+    conn.close()
+
+    return JsonResponse({'message': 'Database and FileTable created successfully.'})
+Configure URLs:
+
+fileupload/urls.py:
+from django.urls import path
+from .views import create_database_and_filetable, upload_file, get_files, download_file
+
+urlpatterns = [
+    path('create-db/', create_database_and_filetable, name='create_database_and_filetable'),
+    path('upload/', upload_file, name='upload_file'),
+    path('files/', get_files, name='get_files'),
+    path('files/<str:file_id>/', download_file, name='download_file'),
+]
+Include App URLs in Project:
+
+myproject/urls.py:
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('fileupload/', include('fileupload.urls')),
+]
+2. Angular Frontend
+a. Set Up Angular Project
+Install Angular CLI and Create a Project:
+
+npm install -g @angular/cli
+ng new file-upload-app
+cd file-upload-app
+Generate Component for Database Creation:
+
+ng generate component create-db
+b. Implement Database Creation Logic
+Create DB Component:
+
+src/app/create-db/create-db.component.html:
+
+<button (click)="createDatabase()">Create Database and FileTable</button>
+<p>{{ message }}</p>
+src/app/create-db/create-db.component.ts:
+
+import { Component } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+
+@Component({
+  selector: 'app-create-db',
+  templateUrl: './create-db.component.html',
+  styleUrls: ['./create-db.component.css']
+})
+export class CreateDbComponent {
+  message: string;
+
+  constructor(private http: HttpClient) {}
+
+  createDatabase() {
+    this.http.get('/fileupload/create-db/').subscribe(response => {
+      this.message = response['message'];
+    });
+  }
+}
+Configure Proxy for API Requests:
+
+Create a proxy.conf.json file to proxy API requests to the Django backend:
+
+{
+  "/fileupload": {
+    "target": "http://localhost:8000",
+    "secure": false
+  }
+}
+Update angular.json to use the proxy configuration:
+
+"architect": {
+  "serve": {
+    "options": {
+      "proxyConfig": "src/proxy.conf.json"
+    }
+  }
+}
+3. Run the Application
+Start Django Server:
+
+Run the Django development server:
+python manage.py runserver
+Start Angular Development Server:
+
+Run the Angular development server:
+ng serve
