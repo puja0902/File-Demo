@@ -39,85 +39,104 @@ GO
 
 
 
-
-
-
-
-
-
-
-
-
-
+Got it! Let's use Django's ORM (Object-Relational Mapping) with models.py, serializers.py, and views.py to create and manage a table in the database. We'll use Django REST framework to handle the API endpoints.
 
 1. Django Backend
 a. Set Up Django Project
-Install Django and Create a Project:
+Install Django and Django REST framework:
 
-pip install django
+pip install django djangorestframework pyodbc
 django-admin startproject myproject
 cd myproject
 Create a Django App:
 
 python manage.py startapp fileupload
-b. Configure Views for Database and FileTable Creation
-Views for Creating Database and FileTable:
+b. Configure Models, Serializers, and Views
+Define Models:
+
+fileupload/models.py:
+from django.db import models
+
+class Document(models.Model):
+    name = models.CharField(max_length=255)
+    file_stream = models.BinaryField()
+
+    def __str__(self):
+        return self.name
+Create Serializers:
+
+fileupload/serializers.py:
+from rest_framework import serializers
+from .models import Document
+
+class DocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Document
+        fields = ['id', 'name', 'file_stream']
+Create Views:
 
 fileupload/views.py:
-from django.http import JsonResponse
+from rest_framework import viewsets
+from rest_framework.response import Response
+from rest_framework.decorators import action
+from .models import Document
+from .serializers import DocumentSerializer
 import pyodbc
 
-def create_database_and_filetable(request):
-    conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;UID=your_username;PWD=your_password')
-    cursor = conn.cursor()
+class DocumentViewSet(viewsets.ModelViewSet):
+    queryset = Document.objects.all()
+    serializer_class = DocumentSerializer
 
-    # Create Database
-    cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'FileTableDB')
-    BEGIN
-        CREATE DATABASE FileTableDB
-        ON PRIMARY
-        ( NAME = FileTableDB_data,
-          FILENAME = 'C:\\FileTableDB_data.mdf' ),
-        FILEGROUP FileStreamGroup CONTAINS FILESTREAM
-        ( NAME = FileTableDB_fs,
-          FILENAME = 'C:\\FileTableDB_fs' )
-        LOG ON
-        ( NAME = FileTableDB_log,
-          FILENAME = 'C:\\FileTableDB_log.ldf' )
-        WITH FILESTREAM ( NON_TRANSACTED_ACCESS = FULL )
-    END
-    """)
-    conn.commit()
+    @action(detail=False, methods=['post'])
+    def upload(self, request):
+        file = request.FILES['file']
+        file_bytes = file.read()
 
-    # Create FileTable
-    cursor.execute("""
-    USE FileTableDB;
-    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DocumentStore')
-    BEGIN
-        CREATE TABLE DocumentStore AS FileTable
-        WITH
-        (
-          FILETABLE_DIRECTORY = 'DocumentStore',
-          FILETABLE_COLLATE_FILENAME = database_default
-        )
-    END
-    """)
-    conn.commit()
-    conn.close()
+        conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO DocumentStore (name, file_stream) VALUES (?, ?)", file.name, file_bytes)
+        conn.commit()
+        conn.close()
 
-    return JsonResponse({'message': 'Database and FileTable created successfully.'})
+        document = Document(name=file.name, file_stream=file_bytes)
+        document.save()
+
+        return Response({'message': 'File uploaded successfully.'})
+
+    @action(detail=False, methods=['get'])
+    def get_files(self, request):
+        conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+        cursor = conn.cursor()
+        cursor.execute("SELECT stream_id, name FROM DocumentStore")
+        files = cursor.fetchall()
+        conn.close()
+
+        file_list = [{'id': file.stream_id, 'name': file.name} for file in files]
+        return Response(file_list)
+
+    @action(detail=True, methods=['get'])
+    def download_file(self, request, pk=None):
+        conn = pyodbc.connect('DRIVER={SQL Server};SERVER=your_server;DATABASE=FileTableDB;UID=your_username;PWD=your_password')
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_stream FROM DocumentStore WHERE stream_id = ?", pk)
+        file = cursor.fetchone()
+        conn.close()
+
+        response = HttpResponse(file.file_stream, content_type='application/octet-stream')
+        response['Content-Disposition'] = f'attachment; filename="{pk}"'
+        return response
 Configure URLs:
 
 fileupload/urls.py:
-from django.urls import path
-from .views import create_database_and_filetable, upload_file, get_files, download_file
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import DocumentViewSet
+
+router = DefaultRouter()
+router.register(r'documents', DocumentViewSet)
 
 urlpatterns = [
-    path('create-db/', create_database_and_filetable, name='create_database_and_filetable'),
-    path('upload/', upload_file, name='upload_file'),
-    path('files/', get_files, name='get_files'),
-    path('files/<str:file_id>/', download_file, name='download_file'),
+    path('', include(router.urls)),
 ]
 Include App URLs in Project:
 
@@ -129,6 +148,10 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('fileupload/', include('fileupload.urls')),
 ]
+Run Migrations:
+
+python manage.py makemigrations fileupload
+python manage.py migrate
 2. Angular Frontend
 a. Set Up Angular Project
 Install Angular CLI and Create a Project:
@@ -136,35 +159,92 @@ Install Angular CLI and Create a Project:
 npm install -g @angular/cli
 ng new file-upload-app
 cd file-upload-app
-Generate Component for Database Creation:
+Generate File Upload Component:
 
-ng generate component create-db
-b. Implement Database Creation Logic
-Create DB Component:
+ng generate component file-upload
+b. Implement File Upload and Retrieval
+File Upload Component:
 
-src/app/create-db/create-db.component.html:
+src/app/file-upload/file-upload.component.html:
 
-<button (click)="createDatabase()">Create Database and FileTable</button>
-<p>{{ message }}</p>
-src/app/create-db/create-db.component.ts:
+<form (ngSubmit)="onSubmit()">
+  <input type="file" (change)="onFileSelected($event)" />
+  <button type="submit">Upload</button>
+</form>
+<div *ngFor="let file of files">
+  <span>{{ file.name }}</span>
+  <button (click)="downloadFile(file.id)">Download</button>
+</div>
+src/app/file-upload/file-upload.component.ts:
 
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { FileService } from '../file.service';
 
 @Component({
-  selector: 'app-create-db',
-  templateUrl: './create-db.component.html',
-  styleUrls: ['./create-db.component.css']
+  selector: 'app-file-upload',
+  templateUrl: './file-upload.component.html',
+  styleUrls: ['./file-upload.component.css']
 })
-export class CreateDbComponent {
-  message: string;
+export class FileUploadComponent implements OnInit {
+  selectedFile: File;
+  files: any[] = [];
+
+  constructor(private http: HttpClient, private fileService: FileService) {}
+
+  ngOnInit(): void {
+    this.fileService.getFiles().subscribe(data => {
+      this.files = data;
+    });
+  }
+
+  onFileSelected(event) {
+    this.selectedFile = event.target.files[0];
+  }
+
+  onSubmit() {
+    const formData = new FormData();
+    formData.append('file', this.selectedFile);
+
+    this.http.post('/fileupload/documents/upload/', formData).subscribe(response => {
+      console.log('File uploaded successfully', response);
+      this.ngOnInit(); // Refresh the file list
+    });
+  }
+
+  downloadFile(fileId: string): void {
+    this.fileService.downloadFile(fileId).subscribe(blob => {
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileId;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+}
+File Service:
+
+src/app/file.service.ts:
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class FileService {
+  private baseUrl = '/fileupload/documents';
 
   constructor(private http: HttpClient) {}
 
-  createDatabase() {
-    this.http.get('/fileupload/create-db/').subscribe(response => {
-      this.message = response['message'];
-    });
+  getFiles(): Observable<any> {
+    return this.http.get(this.baseUrl);
+  }
+
+  downloadFile(fileId: string): Observable<Blob> {
+    return this.http.get(`${this.baseUrl}/${fileId}/download_file/`, { responseType: 'blob' });
   }
 }
 Configure Proxy for API Requests:
@@ -195,3 +275,4 @@ Start Angular Development Server:
 
 Run the Angular development server:
 ng serve
+This setup uses Django's ORM with models.py, serializers.py, and views.py to create and manage a table in the database, and Angular for the frontend to upload and retrieve files. If you have any questions or need further assistance, feel free to ask!
